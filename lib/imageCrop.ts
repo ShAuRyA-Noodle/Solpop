@@ -2,6 +2,11 @@ import sharp from "sharp";
 import type { BBox } from "./schema";
 import { readExif, type ExifMeta } from "./exif";
 
+// Cap decoded pixel count to defend against decompression bombs on the upload
+// path (a small file can expand to gigapixels in memory). 50 megapixels is well
+// above any legitimate drone/phone panel photo while bounding worst-case memory.
+const MAX_INPUT_PIXELS = 50_000_000;
+
 /**
  * Crop a normalized [ymin, xmin, ymax, xmax] (0-1) region out of `buffer`,
  * with a small expansion margin so we don't shave the panel frame.
@@ -18,7 +23,7 @@ export async function cropFromBBox(
 ): Promise<{ buffer: Buffer; mimeType: string; width: number; height: number }> {
   const { expandRatio = 0.04, maxWidth = 1280, quality = 88 } = opts;
 
-  const meta = await sharp(buffer).metadata();
+  const meta = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
   if (W === 0 || H === 0) throw new Error("Source image has no dimensions");
@@ -37,7 +42,7 @@ export async function cropFromBBox(
   const width = Math.max(1, Math.round((xmax - xmin) * W));
   const height = Math.max(1, Math.round((ymax - ymin) * H));
 
-  let pipeline = sharp(buffer).extract({ left, top, width, height });
+  let pipeline = sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).extract({ left, top, width, height });
   if (width > maxWidth) {
     pipeline = pipeline.resize({ width: maxWidth, withoutEnlargement: true });
   }
@@ -83,11 +88,11 @@ export async function normalizeUpload(
   // reshuffle tags. Non-fatal: bad EXIF returns EMPTY_EXIF.
   const exif = await readExif(buffer);
 
-  const meta = await sharp(buffer).metadata();
+  const meta = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
   const long = Math.max(W, H);
-  let pipe = sharp(buffer).rotate(); // honor EXIF orientation
+  let pipe = sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS }).rotate(); // honor EXIF orientation
   if (long > maxLongEdge) {
     pipe = pipe.resize({
       width: W >= H ? maxLongEdge : undefined,

@@ -56,6 +56,12 @@ function buildDb(): DB {
   const Database = require("better-sqlite3") as typeof import("better-sqlite3");
   const dbFile = process.env.SQLITE_PATH ?? path.join(process.cwd(), "solpop.db");
   const sqlite = new Database(dbFile);
+  // Set busy_timeout FIRST so every subsequent lock acquisition (including the
+  // WAL-mode switch below) waits up to 5s rather than throwing SQLITE_BUSY.
+  // Next collects page data with multiple workers that each open this same file
+  // at import time, which otherwise races to a hard "database is locked" build
+  // error before any timeout is in effect.
+  sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   return drizzle(sqlite, { schema });

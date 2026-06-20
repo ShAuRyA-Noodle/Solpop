@@ -12,6 +12,7 @@ import { synthesizeReport } from "@/lib/groq";
 import { cropFromBBox, normalizeUpload, bufferToDataUrl } from "@/lib/imageCrop";
 import type { ExifMeta } from "@/lib/exif";
 import { withAudit, hashJson } from "@/lib/auditLog";
+import { limit, ipFromRequest } from "@/lib/rateLimit";
 import { MODELS, modelVersion, payloadHash } from "@/lib/models";
 import {
   VISION_SYSTEM,
@@ -37,6 +38,26 @@ function sha256(buf: Buffer): string {
 }
 
 export async function POST(req: NextRequest) {
+  // Rate-limit the most expensive endpoint (multiple vision + synthesis model
+  // calls per request) to prevent cost-drain abuse. Keyed by IP for v0; swap to
+  // `${orgId}:${userId}` once auth lands. Conservative bucket: refill ~1 every
+  // 30s, burst of 4 inspections.
+  const rl = limit(`api.analyze:${ipFromRequest(req)}`, { rate: 1 / 30, burst: 4 });
+  if (!rl.ok) {
+    return new Response(
+      JSON.stringify({ error: "rate_limited", retryAfter: rl.retryAfter }),
+      {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(rl.retryAfter),
+          "X-RateLimit-Limit": String(rl.limit),
+          "X-RateLimit-Remaining": String(rl.remaining),
+        },
+      }
+    );
+  }
+
   const form = await req.formData().catch(() => null);
   if (!form) return jsonError(400, "Invalid multipart form");
 
