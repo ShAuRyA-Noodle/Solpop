@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
   security-events: write
+  # Required by github/codeql-action/analyze to read the workflow run it is
+  # attached to. Without it the analyze step fails with "Resource not accessible
+  # by integration" against /actions/runs even though extraction succeeded.
+  actions: read
 
 jobs:
   analyze:
