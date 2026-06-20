@@ -10,7 +10,7 @@ It works for one panel or twenty-four at once. It takes about a minute.
 
 ## The idea
 
-Solar farms lose ~5–15% of their output every year to stuff that's visible from the ground: dust, micro-cracks, hotspots, leaves, the occasional pigeon. Diagnosing it usually means a thermal-imaging drone, a specialist, and a PDF that arrives a month later.
+Solar farms lose roughly 5 to 15% of their output every year to stuff that's visible from the ground: dust, micro-cracks, hotspots, leaves, the occasional pigeon. Diagnosing it usually means a thermal-imaging drone, a specialist, and a PDF that arrives a month later.
 
 SOLPOP skips that.
 
@@ -65,7 +65,7 @@ The route handler runs on Node and streams **NDJSON** events (`start`, `progress
 ## File map
 
 ```
-solaris/
+solpop/
 ├── app/
 │   ├── layout.tsx          # fonts (Geist, Geist Mono, Instrument Serif), SmoothScroll mount
 │   ├── page.tsx            # root composition: Header → Hero → HowItWorks → SolpopApp → Footer
@@ -108,8 +108,8 @@ solaris/
 ## Getting it running locally
 
 ```bash
-git clone https://github.com/ShAuRyA-Noodle/Flibbertigibbeting.git
-cd Flibbertigibbeting
+git clone https://github.com/ShAuRyA-Noodle/Solpop.git
+cd Solpop
 npm install
 ```
 
@@ -174,6 +174,19 @@ That's the long roadmap. v1 is the foundation: prove that a two-model pipeline w
 SOLPOP is decision-support, not a substitute for a licensed PV engineer. The model is good enough to triage, prioritize, and catch things humans miss in a quick visual sweep, but for warranty claims, replacement decisions, or anything safety-critical, the report should be reviewed by someone with a clipboard and a multimeter.
 
 That's not a hedge. That's just where current vision models actually sit. The point of SOLPOP is to make the inspector's job 10× faster, not to replace them.
+
+---
+
+## Security
+
+This is an anonymous demo surface that calls paid vision and reasoning models, so the routes are written defensively:
+
+- Every model-calling API route enforces per-IP rate limiting (token bucket), an explicit body or file-size cap, and strict MIME validation. The image inspection route caps file count, file size, and decoded pixel count to blunt cost-drain and decompression-bomb abuse.
+- No API keys ship to the client. Gemini and Groq keys are read from server-only env and never exposed via `NEXT_PUBLIC_`.
+- Share links persist to a Drizzle-backed SQL row keyed by a sanitized random ID, not raw filesystem writes.
+- CodeQL `security-extended` runs on every push, PR, and weekly. Dependabot weekly security and version updates keep dependencies advisory-clean, with `npm overrides` pinning transitive packages.
+
+Found something? See [SECURITY.md](./SECURITY.md). Please do not open a public issue for vulnerabilities.
 
 ---
 
