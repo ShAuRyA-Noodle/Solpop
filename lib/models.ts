@@ -48,8 +48,8 @@ export function modelVersion(
 }
 
 export const MODELS = {
-  visionPrimary: () => envModel("GEMINI_MODEL", "gemini-2.5-flash"),
-  visionFallbacks: ["gemini-2.5-flash", "gemini-2.0-flash"] as const,
+  visionPrimary: () => envModel("GEMINI_MODEL", "gemini-3-flash"),
+  visionFallbacks: ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"] as const,
   synthesis: () => envModel("GROQ_MODEL", "llama-3.3-70b-versatile"),
 };
 

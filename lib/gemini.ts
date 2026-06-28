@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { z } from "zod";
 import { PanelAnalysisSchema, type PanelAnalysis, type BBox } from "./schema";
 import { VISION_SYSTEM, VISION_USER, DETECT_SYSTEM, DETECT_USER } from "./prompts";
@@ -6,10 +7,80 @@ import { uid } from "./utils";
 import { normalizeUpload } from "./imageCrop";
 
 const apiKey = process.env.GEMINI_API_KEY!;
-const primaryModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+const primaryModel = process.env.GEMINI_MODEL || "gemini-3-flash";
+const FALLBACK_MODELS = ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
 
 const ai = new GoogleGenAI({ apiKey });
+
+// =============================================================================
+// Groq vision fallback — kicks in when Gemini quota / outage exhausts the chain.
+// Llama 4 Scout / Maverick are multimodal on Groq's OpenAI-compatible chat API.
+// Bounding-box quality is lower than Gemini's, so detection still skips this
+// fallback (single-image flow handles missing detection gracefully). Used for
+// vision.analyze and vision.gate only.
+// =============================================================================
+
+const groqApiKey = process.env.GROQ_API_KEY;
+const GROQ_VISION_MODEL =
+  process.env.GROQ_VISION_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
+const GROQ_VISION_FALLBACKS = [
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+];
+
+const groqVision = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
+
+async function callGroqVisionJSON(
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  b64: string,
+  mimeType: string
+): Promise<string> {
+  if (!groqVision) throw new Error("GROQ_API_KEY missing — vision fallback unavailable");
+  const completion = await groqVision.chat.completions.create({
+    model,
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: userPrompt },
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64}` } },
+        ],
+      },
+    ],
+  });
+  return completion.choices?.[0]?.message?.content ?? "";
+}
+
+async function tryGroqVisionCascade(
+  systemPrompt: string,
+  userPrompt: string,
+  b64: string,
+  mimeType: string
+): Promise<{ text: string; modelName: string }> {
+  if (!groqVision) throw new Error("GROQ_API_KEY missing — vision fallback unavailable");
+  const candidates = [GROQ_VISION_MODEL, ...GROQ_VISION_FALLBACKS.filter((m) => m !== GROQ_VISION_MODEL)];
+  let lastErr: unknown;
+  for (const model of candidates) {
+    try {
+      const text = await withRateLimitRetry(() =>
+        callGroqVisionJSON(model, systemPrompt, userPrompt, b64, mimeType)
+      );
+      return { text, modelName: `groq:${model}` };
+    } catch (e) {
+      lastErr = e;
+      continue;
+    }
+  }
+  throw new Error(
+    `Groq vision fallback failed across models [${candidates.join(", ")}]: ${
+      lastErr instanceof Error ? lastErr.message : String(lastErr)
+    }`
+  );
+}
 
 function stripFences(s: string) {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
@@ -154,38 +225,55 @@ export async function analyzePanelImageWithMeta(
   for (const model of candidates) {
     try {
       const text = await withRateLimitRetry(() => callVisionModel(model, b64, mimeType, fileName));
-      const parsed = safeParse<Record<string, unknown> & { defects?: Array<Record<string, unknown>> }>(
-        text
-      );
-      if (!parsed) throw new Error("Vision response not parseable JSON");
-      if (!parsed.panelId) parsed.panelId = `PNL-${uid().toUpperCase()}`;
-      parsed.fileName = fileName;
-
-      // Normalize defect bboxes
-      if (Array.isArray(parsed.defects)) {
-        for (const d of parsed.defects) {
-          if (d && typeof d === "object") {
-            const norm = normalizeBBox((d as { bbox?: unknown }).bbox);
-            if (norm) (d as { bbox: BBox }).bbox = norm;
-            else delete (d as { bbox?: unknown }).bbox;
-          }
-        }
-      }
-
-      const validated = PanelAnalysisSchema.parse(parsed);
+      const validated = parseAndValidateVisionJson(text, fileName);
       return { data: validated, modelName: model };
     } catch (e) {
       lastErr = e;
-      // If we ran out of quota even on this model, the next fallback is likely also exhausted.
-      // Still try once in case primary fails for non-quota reasons.
       continue;
     }
   }
+
+  // Final fallback: Groq vision (Llama 4 Scout / Maverick).
+  if (groqVision) {
+    try {
+      const { text, modelName } = await tryGroqVisionCascade(
+        VISION_SYSTEM,
+        VISION_USER(fileName),
+        b64,
+        mimeType
+      );
+      const validated = parseAndValidateVisionJson(text, fileName);
+      return { data: validated, modelName };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
   throw new Error(
-    `Gemini vision failed across models [${candidates.join(", ")}]: ${
+    `Vision failed across Gemini [${candidates.join(", ")}] and Groq fallback: ${
       lastErr instanceof Error ? lastErr.message : String(lastErr)
     }`
   );
+}
+
+function parseAndValidateVisionJson(text: string, fileName: string): PanelAnalysis {
+  const parsed = safeParse<Record<string, unknown> & { defects?: Array<Record<string, unknown>> }>(
+    text
+  );
+  if (!parsed) throw new Error("Vision response not parseable JSON");
+  if (!parsed.panelId) parsed.panelId = `PNL-${uid().toUpperCase()}`;
+  parsed.fileName = fileName;
+
+  if (Array.isArray(parsed.defects)) {
+    for (const d of parsed.defects) {
+      if (d && typeof d === "object") {
+        const norm = normalizeBBox((d as { bbox?: unknown }).bbox);
+        if (norm) (d as { bbox: BBox }).bbox = norm;
+        else delete (d as { bbox?: unknown }).bbox;
+      }
+    }
+  }
+  return PanelAnalysisSchema.parse(parsed);
 }
 
 export async function analyzePanelImage(
@@ -365,6 +453,31 @@ export async function gatePanelImageWithMeta(
       continue;
     }
   }
+
+  // Final fallback: Groq vision.
+  if (groqVision) {
+    try {
+      const { text, modelName } = await tryGroqVisionCascade(
+        GATE_SYSTEM,
+        GATE_USER,
+        b64,
+        small.mimeType
+      );
+      const parsed = safeParse<unknown>(text);
+      if (parsed) {
+        const validated = GateResultSchema.safeParse(parsed);
+        if (validated.success) {
+          return { data: validated.data, modelName };
+        }
+        lastErr = validated.error;
+      } else {
+        lastErr = new Error("Groq gate response not parseable JSON");
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
   console.error("gatePanelImage failed:", lastErr);
   return { data: GATE_FALLBACK, modelName: null };
 }
