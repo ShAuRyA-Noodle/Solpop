@@ -51,3 +51,4 @@ solpop.db
 solpop.db-journal
 solpop.db-wal
 solpop.db-shm
+.kilo/

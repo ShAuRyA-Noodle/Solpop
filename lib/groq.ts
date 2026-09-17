@@ -2,10 +2,19 @@ import Groq from "groq-sdk";
 import { SystemReportSchema, type PanelAnalysis, type SystemReport } from "./schema";
 import { SYNTHESIS_SYSTEM, SYNTHESIS_USER } from "./prompts";
 
-const apiKey = process.env.GROQ_API_KEY!;
 const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
-const groq = new Groq({ apiKey });
+// Lazy so `next build` (page-data collection) doesn't crash when the key is
+// absent at build time; the error surfaces on the first real request instead.
+let groqClient: Groq | null = null;
+function getGroq(): Groq {
+  if (!groqClient) {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) throw new Error("GROQ_API_KEY environment variable is missing");
+    groqClient = new Groq({ apiKey });
+  }
+  return groqClient;
+}
 
 export type Persona = "engineer" | "junior" | "claims" | "investor";
 export type SynthLocale = "en" | "es" | "pt" | "hi" | "fr" | "de" | "zh";
@@ -71,7 +80,7 @@ export async function synthesizeReport(
 
   const systemPrompt = SYNTHESIS_SYSTEM + PERSONA_NOTES[persona] + LOCALE_INSTRUCTIONS[locale];
 
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroq().chat.completions.create({
     model,
     temperature: 0.3,
     response_format: { type: "json_object" },
