@@ -17,7 +17,7 @@ export type ModelVersionRef = {
   /** Stable, human-readable id used in audit log + UI. */
   id: string;
   role: ModelRole;
-  provider: "google" | "groq" | "openai" | "anthropic";
+  provider: "google" | "groq" | "openai" | "anthropic" | "openrouter";
   modelName: string;
   /** SHA-256 of (system + user) prompt template, first 16 hex chars. */
   promptHash: string;
@@ -48,9 +48,13 @@ export function modelVersion(
 }
 
 export const MODELS = {
-  visionPrimary: () => envModel("GEMINI_MODEL", "gemini-3-flash"),
-  visionFallbacks: ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"] as const,
-  synthesis: () => envModel("GROQ_MODEL", "llama-3.3-70b-versatile"),
+  visionPrimary: () => envModel("OPENROUTER_MODEL", "google/gemma-4-31b-it:free"),
+  visionFallbacks: [
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  ] as const,
+  synthesis: () => envModel("GROQ_MODEL", "openai/gpt-oss-120b"),
 };
 
 /**

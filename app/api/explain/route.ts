@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const apiKey = process.env.GROQ_API_KEY!;
-const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 const groq = new Groq({ apiKey });
 

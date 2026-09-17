@@ -108,7 +108,7 @@ export function Hero() {
 
           <div className="flex items-center gap-3 ml-2">
             <span className="tick">Powered by</span>
-            <span className="font-mono text-[13px] text-[var(--fg-dim)]">Gemini Vision</span>
+            <span className="font-mono text-[13px] text-[var(--fg-dim)]">Gemma 4 Vision</span>
             <span className="text-[var(--fg-mute)]">·</span>
             <span className="font-mono text-[13px] text-[var(--fg-dim)]">Llama 3.3 70B</span>
           </div>

@@ -2,7 +2,7 @@ import Groq from "groq-sdk";
 import { SystemReportSchema, type PanelAnalysis, type SystemReport } from "./schema";
 import { SYNTHESIS_SYSTEM, SYNTHESIS_USER } from "./prompts";
 
-const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 // Lazy so `next build` (page-data collection) doesn't crash when the key is
 // absent at build time; the error surfaces on the first real request instead.

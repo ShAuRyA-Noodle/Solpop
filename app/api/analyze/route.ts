@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
         try {
           const gateRef = modelVersion(
             "panel-gate",
-            "google",
+            "openrouter",
             MODELS.visionPrimary(),
             GATE_SYSTEM,
             GATE_USER
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
         try {
           const detectRef = modelVersion(
             "detect",
-            "google",
+            "openrouter",
             MODELS.visionPrimary(),
             DETECT_SYSTEM,
             DETECT_USER
@@ -284,7 +284,7 @@ export async function POST(req: NextRequest) {
             const cropSha = sha256(j.buffer);
             const analyzeRef = modelVersion(
               "vision",
-              "google",
+              "openrouter",
               MODELS.visionPrimary(),
               VISION_SYSTEM,
               VISION_USER(jobLabel)
@@ -355,8 +355,8 @@ export async function POST(req: NextRequest) {
             report,
             generatedAt: new Date().toISOString(),
             modelInfo: {
-              vision: process.env.GEMINI_MODEL || "gemini-flash",
-              synthesis: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+              vision: process.env.OPENROUTER_MODEL || "google/gemma-4-31b-it:free",
+              synthesis: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
             },
           },
         });

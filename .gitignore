@@ -52,3 +52,4 @@ solpop.db-journal
 solpop.db-wal
 solpop.db-shm
 .kilo/
+keys.txt

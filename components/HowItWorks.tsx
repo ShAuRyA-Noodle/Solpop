@@ -14,7 +14,7 @@ const STEPS = [
     icon: Eye,
     label: "02 · See",
     title: "Frontier vision model inspects each panel",
-    body: "Gemini multimodal grades each panel against a 21-defect taxonomy: cracks, hotspots, soiling, delamination, PID, busbar discoloration, frame and junction-box damage.",
+    body: "Gemma 4 multimodal (via OpenRouter) grades each panel against a 21-defect taxonomy: cracks, hotspots, soiling, delamination, PID, busbar discoloration, frame and junction-box damage.",
   },
   {
     icon: FileText,

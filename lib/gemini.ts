@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import Groq from "groq-sdk";
 import { z } from "zod";
 import { PanelAnalysisSchema, type PanelAnalysis, type BBox } from "./schema";
@@ -6,28 +5,115 @@ import { VISION_SYSTEM, VISION_USER, DETECT_SYSTEM, DETECT_USER } from "./prompt
 import { uid } from "./utils";
 import { normalizeUpload } from "./imageCrop";
 
-const apiKey = process.env.GEMINI_API_KEY!;
-const primaryModel = process.env.GEMINI_MODEL || "gemini-3-flash";
-const FALLBACK_MODELS = ["gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+// =============================================================================
+// Primary vision provider: OpenRouter (OpenAI-compatible chat API). Defaults to
+// free-tier multimodal models; chain falls through on 404/429/5xx before
+// handing off to Groq below.
+// =============================================================================
 
-const ai = new GoogleGenAI({ apiKey });
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// Free-tier pools are shared and individually flaky (upstream 429/502), so the
+// chain is deliberately wide. Order: fastest + most JSON-reliable first.
+const primaryModel =
+  process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
+const FALLBACK_MODELS = [
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "nex-agi/nex-n2.5-pro:free",
+  "dots-studio/dots-3-note-preview:free",
+  "inclusionai/ling-3.0-flash-vl:free",
+];
+
+async function callOpenRouterJSON(
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  b64: string,
+  mimeType: string,
+  temperature: number
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY environment variable is missing");
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: userPrompt },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${b64}` } },
+      ],
+    },
+  ];
+
+  async function request(structured: boolean): Promise<string> {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ShAuRyA-Noodle/Solpop",
+        "X-Title": "SOLPOP",
+      },
+      body: JSON.stringify({
+        model,
+        temperature,
+        messages,
+        ...(structured ? { response_format: { type: "json_object" } } : {}),
+      }),
+    });
+    const body = await res.text();
+    let json: {
+      error?: { message?: string; code?: number; metadata?: { raw?: string } };
+      choices?: Array<{ message?: { content?: string } }>;
+    } = {};
+    try {
+      json = JSON.parse(body);
+    } catch {
+      /* non-JSON body handled below */
+    }
+    // OpenRouter can return HTTP 200 with an `error` envelope when the upstream
+    // provider fails, so check both the status and the body.
+    if (!res.ok || json.error) {
+      const detail = json.error?.metadata?.raw ?? json.error?.message ?? body;
+      const status = res.ok ? (json.error?.code ?? 500) : res.status;
+      const err = new Error(`OpenRouter ${model} HTTP ${status}: ${String(detail).slice(0, 300)}`) as Error & {
+        status?: number;
+      };
+      err.status = status;
+      throw err;
+    }
+    return json.choices?.[0]?.message?.content ?? "";
+  }
+
+  try {
+    return await request(true);
+  } catch (e) {
+    // Some free models reject `response_format`; the prompts already demand JSON
+    // and safeParse tolerates fences, so retry once in plain mode.
+    if (e instanceof Error && /structured-outputs|response_format/i.test(e.message)) {
+      return request(false);
+    }
+    throw e;
+  }
+}
 
 // =============================================================================
-// Groq vision fallback — kicks in when Gemini quota / outage exhausts the chain.
+// Groq vision fallback — kicks in when OpenRouter quota / outage exhausts the chain.
 // Llama 4 Scout / Maverick are multimodal on Groq's OpenAI-compatible chat API.
 // Bounding-box quality is lower than Gemini's, so detection still skips this
 // fallback (single-image flow handles missing detection gracefully). Used for
 // vision.analyze and vision.gate only.
 // =============================================================================
 
+// Groq currently lists no multimodal models, so this fallback is opt-in: set
+// GROQ_VISION_MODEL to enable it.
 const groqApiKey = process.env.GROQ_API_KEY;
-const GROQ_VISION_MODEL =
-  process.env.GROQ_VISION_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
-const GROQ_VISION_FALLBACKS = [
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
-];
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || "";
+const GROQ_VISION_FALLBACKS: string[] = [];
 
-const groqVision = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
+const groqVision = groqApiKey && GROQ_VISION_MODEL ? new Groq({ apiKey: groqApiKey }) : null;
 
 async function callGroqVisionJSON(
   model: string,
@@ -193,24 +279,7 @@ async function callVisionModel(
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  const res = await ai.models.generateContent({
-    model,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: VISION_SYSTEM },
-          { inlineData: { mimeType, data: b64 } },
-          { text: VISION_USER(fileName) },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      temperature: 0.2,
-    },
-  });
-  return res.text ?? "";
+  return callOpenRouterJSON(model, VISION_SYSTEM, VISION_USER(fileName), b64, mimeType, 0.2);
 }
 
 export async function analyzePanelImageWithMeta(
@@ -250,7 +319,7 @@ export async function analyzePanelImageWithMeta(
   }
 
   throw new Error(
-    `Vision failed across Gemini [${candidates.join(", ")}] and Groq fallback: ${
+    `Vision failed across OpenRouter [${candidates.join(", ")}] and Groq fallback: ${
       lastErr instanceof Error ? lastErr.message : String(lastErr)
     }`
   );
@@ -292,24 +361,7 @@ export async function analyzePanelImage(
 export type DetectedPanel = { bbox: BBox; confidence: number };
 
 async function callDetectModel(model: string, b64: string, mimeType: string): Promise<string> {
-  const res = await ai.models.generateContent({
-    model,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: DETECT_SYSTEM },
-          { inlineData: { mimeType, data: b64 } },
-          { text: DETECT_USER },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      temperature: 0.1,
-    },
-  });
-  return res.text ?? "";
+  return callOpenRouterJSON(model, DETECT_SYSTEM, DETECT_USER, b64, mimeType, 0.1);
 }
 
 export async function detectPanelsWithMeta(
@@ -396,24 +448,7 @@ const GateResultSchema = z.object({
 export type PanelGateResult = z.infer<typeof GateResultSchema>;
 
 async function callGateModel(model: string, b64: string, mimeType: string): Promise<string> {
-  const res = await ai.models.generateContent({
-    model,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: GATE_SYSTEM },
-          { inlineData: { mimeType, data: b64 } },
-          { text: GATE_USER },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      temperature: 0.1,
-    },
-  });
-  return res.text ?? "";
+  return callOpenRouterJSON(model, GATE_SYSTEM, GATE_USER, b64, mimeType, 0.1);
 }
 
 const GATE_FALLBACK: PanelGateResult = {
